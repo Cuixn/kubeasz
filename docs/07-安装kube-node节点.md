@@ -2,10 +2,10 @@
 
 node 是集群中承载应用的节点，前置条件需要先部署好master节点(因为需要操作`用户角色绑定`、`批准kubelet TLS 证书请求`等)，它需要部署如下组件：
 
-+ docker 运行容器
-+ calico 配置容器网络
-+ kubelet node上最主要的服务
-+ kubeproxy 发布应用服务与负载均衡
++ docker：运行容器
++ calico： 配置容器网络
++ kubelet： node上最主要的组件
++ kube-proxy： 发布应用服务与负载均衡
 
 ``` bash
 roles/kube-node
@@ -82,7 +82,6 @@ ExecStart={{ bin_dir }}/kubelet \
   --cni-bin-dir={{ bin_dir }} \
   --cluster-dns={{ CLUSTER_DNS_SVC_IP }} \
   --cluster-domain={{ CLUSTER_DNS_DOMAIN }} \
-  --cloud-provider='' \
   --hairpin-mode hairpin-veth \
   --allow-privileged=true \
   --fail-swap-on=false \
@@ -99,7 +98,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
-+ --pod-infra-container-image 指定`基础容器`的镜像，负责创建Pod 内部共享的网络、文件系统等
++ --pod-infra-container-image 指定`基础容器`的镜像，负责创建Pod 内部共享的网络、文件系统等，这个基础容器非常重要：**K8S每一个运行的 POD里面必然包含这个基础容器**，如果它没有运行起来那么你的POD 肯定创建不了，kubelet日志里面会看到类似 ` FailedCreatePodSandBox` 错误，本项目集群常见 `SandBox` 容器起不来有两个原因：a. pause镜像没有下载到 b. calico/node 容器还没有正常运行，可用`docker ps -a` 验证
 + --experimental-bootstrap-kubeconfig 指向 bootstrap kubeconfig 文件，kubelet 使用该文件中的用户名和 token 向 kube-apiserver 发送 TLS Bootstrapping 请求
 + --cluster-dns 指定 kubedns 的 Service IP(可以先分配，后续创建 kubedns 服务时指定该 IP)，--cluster-domain 指定域名后缀，这两个参数同时指定后才会生效；
 + --network-plugin=cni --cni-conf-dir=/etc/cni/net.d --cni-bin-dir={{ bin_dir }} 为使用cni 网络，并调用calico管理网络所需的配置
@@ -213,3 +212,27 @@ calico networkpolicy正常工作需要3个组件：
         {{ bin_dir }}/kubectl create -f /root/local/kube-system/calico/calico-kube-controllers.yaml"
 ```
 + 增加15s等待集群node ready
+
+### 验证 node 状态
+
+``` bash
+systemctl status kubelet	# 查看状态
+systemctl status kube-proxy
+journalctl -u kubelet		# 查看日志
+journalctl -u kube-proxy 
+```
+运行 `kubectl get node` 可以看到类似
+
+``` bash
+NAME           STATUS    ROLES     AGE       VERSION
+192.168.1.42   Ready     <none>    2d        v1.8.4
+192.168.1.43   Ready     <none>    2d        v1.8.4
+192.168.1.44   Ready     <none>    2d        v1.8.4
+```
+并且稍等一会，`kubectl get pod -n kube-system -o wide` 可以看到有个calico controller 的POD运行，且使用了host 网络
+
+``` bash
+kubectl get pod -n kube-system -o wide
+NAME                                      READY     STATUS    RESTARTS   AGE       IP              NODE
+calico-kube-controllers-69bcb79c6-b444q   1/1       Running   0          2d        192.168.1.44    192.168.1.44
+```

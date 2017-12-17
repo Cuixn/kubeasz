@@ -63,7 +63,11 @@ roles/calico/
   ]
 }
 ```
-然后生成证书
+- calico 使用客户端证书，所以hosts字段可以为空；后续可以看到calico证书用在四个地方：
+  - calico/node 这个docker 容器运行时访问 etcd 使用证书
+  - cni 配置文件中，cni 插件需要访问 etcd 使用证书
+  - calicoctl 操作集群网络时访问 etcd 使用证书
+  - calico/kube-controllers 同步集群网络策略时访问 etcd 使用证书
 
 ### 创建 calico-node 的服务文件 [calico-node.service.j2](../roles/calico/templates/calico-node.service.j2)
 
@@ -110,7 +114,7 @@ WantedBy=multi-user.target
 + calico-node是以docker容器运行在host上的，因此需要把之前的证书目录 /etc/calico/ssl挂载到容器中
 + 配置ETCD_ENDPOINTS 、CA、证书等，所有{{ }}变量与ansible hosts文件中设置对应
 + 配置集群POD网络 CALICO_IPV4POOL_CIDR={{ CLUSTER_CIDR }}
-+ 本K8S集群运行在自有kvm虚机上，虚机间没有网络ACL限制，因此可以设置CALICO_IPV4POOL_IPIP=off，如果运行在公有云虚机上可能需要打开这个选项
++ 本K8S集群运行在自有kvm虚机上，虚机间没有网络ACL限制，因此可以设置`CALICO_IPV4POOL_IPIP=off`，如果运行在公有云虚机上可能需要打开这个选项 `CALICO_IPV4POOL_IPIP=always`
 + 配置FELIX_DEFAULTENDPOINTTOHOSTACTION=ACCEPT 默认允许Pod到Node的网络流量，更多[felix配置选项](https://docs.projectcalico.org/v2.6/reference/felix/configuration)
 
 ### 启动calico-node
@@ -158,7 +162,13 @@ spec:
 
 ### 验证calico网络
 
-执行calico安装 `ansible-playbook 05.calico.yml` 成功后可以验证如下：
+执行calico安装 `ansible-playbook 05.calico.yml` 成功后可以验证如下：(需要等待calico/node:v2.6.2 镜像下载完成，有时候即便上一步已经配置了docker国内加速，还是可能比较慢，建议确认以下容器运行起来以后，再执行后续步骤)
+
+``` bash
+docker ps 
+CONTAINER ID        IMAGE                COMMAND             CREATED             STATUS              PORTS               NAMES
+631dde89eada        calico/node:v2.6.2   "start_runit"       10 minutes ago      Up 10 minutes                           calico-node
+```
 
 **查看网卡和路由信息**
 
@@ -175,14 +185,14 @@ ip a   #...省略其他网卡信息，可以看到包含类似cali1cxxx的网卡
 route -n
 Kernel IP routing table
 Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
-0.0.0.0         10.100.80.1     0.0.0.0         UG    0      0        0 ens3
-10.100.80.0     0.0.0.0         255.255.255.0   U     0      0        0 ens3
+0.0.0.0         192.168.1.1     0.0.0.0         UG    0      0        0 ens3
+192.168.1.0     0.0.0.0         255.255.255.0   U     0      0        0 ens3
 172.17.0.0      0.0.0.0         255.255.0.0     U     0      0        0 docker0
-172.20.3.64     10.100.80.65    255.255.255.192 UG    0      0        0 ens3
+172.20.3.64     192.168.1.65    255.255.255.192 UG    0      0        0 ens3
 172.20.33.128   0.0.0.0         255.255.255.192 U     0      0        0 *
 172.20.33.129   0.0.0.0         255.255.255.255 UH    0      0        0 caliccc295a6d4f
-172.20.104.0    10.100.80.37    255.255.255.192 UG    0      0        0 ens3
-172.20.166.128  10.100.80.36    255.255.255.192 UG    0      0        0 ens3
+172.20.104.0    192.168.1.37    255.255.255.192 UG    0      0        0 ens3
+172.20.166.128  192.168.1.36    255.255.255.192 UG    0      0        0 ens3
 ```
 
 **查看所有calico节点状态**
@@ -195,12 +205,12 @@ IPv4 BGP status
 +--------------+-------------------+-------+----------+-------------+
 | PEER ADDRESS |     PEER TYPE     | STATE |  SINCE   |    INFO     |
 +--------------+-------------------+-------+----------+-------------+
-| 10.100.80.34 | node-to-node mesh | up    | 12:34:00 | Established |
-| 10.100.80.35 | node-to-node mesh | up    | 12:34:00 | Established |
-| 10.100.80.63 | node-to-node mesh | up    | 12:34:01 | Established |
-| 10.100.80.36 | node-to-node mesh | up    | 12:34:00 | Established |
-| 10.100.80.65 | node-to-node mesh | up    | 12:34:00 | Established |
-| 10.100.80.37 | node-to-node mesh | up    | 12:34:15 | Established |
+| 192.168.1.34 | node-to-node mesh | up    | 12:34:00 | Established |
+| 192.168.1.35 | node-to-node mesh | up    | 12:34:00 | Established |
+| 192.168.1.63 | node-to-node mesh | up    | 12:34:01 | Established |
+| 192.168.1.36 | node-to-node mesh | up    | 12:34:00 | Established |
+| 192.168.1.65 | node-to-node mesh | up    | 12:34:00 | Established |
+| 192.168.1.37 | node-to-node mesh | up    | 12:34:15 | Established |
 +--------------+-------------------+-------+----------+-------------+
 ```
 
@@ -208,12 +218,12 @@ IPv4 BGP status
 
 ``` bash
 netstat -antlp|grep ESTABLISHED|grep 179
-tcp        0      0 10.100.80.66:179        10.100.80.35:41316      ESTABLISHED 28479/bird      
-tcp        0      0 10.100.80.66:179        10.100.80.36:52823      ESTABLISHED 28479/bird      
-tcp        0      0 10.100.80.66:179        10.100.80.65:56311      ESTABLISHED 28479/bird      
-tcp        0      0 10.100.80.66:42000      10.100.80.37:179        ESTABLISHED 28479/bird 
-tcp        0      0 10.100.80.66:179        10.100.80.34:40243      ESTABLISHED 28479/bird      
-tcp        0      0 10.100.80.66:179        10.100.80.63:48979      ESTABLISHED 28479/bird
+tcp        0      0 192.168.1.66:179        192.168.1.35:41316      ESTABLISHED 28479/bird      
+tcp        0      0 192.168.1.66:179        192.168.1.36:52823      ESTABLISHED 28479/bird      
+tcp        0      0 192.168.1.66:179        192.168.1.65:56311      ESTABLISHED 28479/bird      
+tcp        0      0 192.168.1.66:42000      192.168.1.37:179        ESTABLISHED 28479/bird 
+tcp        0      0 192.168.1.66:179        192.168.1.34:40243      ESTABLISHED 28479/bird      
+tcp        0      0 192.168.1.66:179        192.168.1.63:48979      ESTABLISHED 28479/bird
 ```
 
 **查看集群ipPool情况**
